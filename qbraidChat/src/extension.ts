@@ -99,9 +99,17 @@ async function getOrSetApiKey(): Promise<string | undefined> {
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     console.log('Activating QBraid Chat extension'); 
-	chatViewProvider  = new ChatViewProvider(context.extensionUri);
+    const apiKey = await getOrSetApiKey();
+    if (!apiKey) {
+        vscode.window.showErrorMessage('API key is required for qBraid Chat extension.');
+        return;
+    }else {
+        console.log('API key found');
+    }
+
+	chatViewProvider  = new ChatViewProvider(context.extensionUri, apiKey, API_URL);
 
 	// Register the webview provider
     const viewRegistration = vscode.window.registerWebviewViewProvider(
@@ -111,40 +119,31 @@ export function activate(context: vscode.ExtensionContext) {
             webviewOptions: { retainContextWhenHidden: true }
         }
     );
+    
 
+    // Automatically show the chat window after activation
+    try {
+        setTimeout(() => {
+        vscode.commands.executeCommand('chatView.focus');}, 100); // Small delay to ensure UI is ready
+    } catch(error) {
+        console.error('Failed to focus chat view:', error);
+    };
 
+    
 	// Register send message command
-    const sendMessageCommand = vscode.commands.registerCommand(
-        'qbraid-chat.sendMessage',
-        async () => {
-            console.log('Command triggered: qbraid-chat.sendMessage');
-            
-            // Fetch API key when extension activates
-            const apiKey = await getOrSetApiKey();
-            if (!apiKey) {
-                vscode.window.showErrorMessage('API key is required for qBraid Chat extension.');
-                return;
-            }else {
-                console.log('API key found');
-            }
-            // First ensure the chat view is visible
-            try {
-                await vscode.commands.executeCommand('chatView.focus');
-                
-                const message = await vscode.window.showInputBox({
-                    placeHolder: 'Type your message...',
-                    prompt: 'Send a message to the chat'
-                });
+     // Register the send message command
+     const sendMessageCommand = vscode.commands.registerCommand('qbraid-chat.sendMessage', async () => {
+        console.log('Command triggered: qbraid-chat.sendMessage');
 
-                if (message) {
-                    await chatViewProvider.sendMessage(message);
-                }
-            } catch (error) {
-                console.error('Error in command execution:', error);
-                vscode.window.showErrorMessage('Failed to initialize chat view');
-            }
+        const message = await vscode.window.showInputBox({
+            placeHolder: 'Type your message...',
+            prompt: 'Send a message to the chat',
+        });
+
+        if (message) {
+            await chatViewProvider.handleUserMessage(message, "gpt-4o-mini");
         }
-    );
+    });
 
     context.subscriptions.push(viewRegistration, sendMessageCommand);
 
