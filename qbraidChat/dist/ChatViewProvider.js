@@ -32,107 +32,197 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatViewProvider = void 0;
 const vscode = __importStar(require("vscode"));
-const axios_1 = __importDefault(require("axios"));
+const webview_html_1 = require("./webview.html");
 class ChatViewProvider {
     _extensionUri;
     _view;
     _messages = [];
     _isInitialized = false;
-    constructor(_extensionUri) {
+    _apiKey;
+    modelNames = [];
+    selectedModel = null;
+    isProcessing = false;
+    API_URL;
+    constructor(_extensionUri, apiKey, API_URL) {
         this._extensionUri = _extensionUri;
-    }
-    async sendMessage(message) {
-        // If view isn't initialized, try to show it first
-        if (!this._isInitialized) {
-            await vscode.commands.executeCommand('workbench.view.extension.chatViewContainer');
-            // Wait a bit for the view to initialize
-            await new Promise(resolve => setTimeout(resolve, 500));
-        }
-        if (!this._view) {
-            console.error('Chat view still not initialized');
-            vscode.window.showErrorMessage('Unable to initialize chat view. Please try reopening the chat panel.');
-            return;
-        }
-        try {
-            console.log('Processing message:', message);
-            this._messages.push({ role: 'user', content: message });
-            this._updateWebview();
-            const response = await axios_1.default.post('YOUR_API_ENDPOINT', {
-                message: message
-            }, {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer YOUR_API_KEY'
-                }
-            });
-            this._messages.push({
-                role: 'assistant',
-                content: response.data.message
-            });
-            this._updateWebview();
-        }
-        catch (error) {
-            console.error('Error in sendMessage:', error);
-            vscode.window.showErrorMessage('Failed to send message');
-        }
+        this._apiKey = apiKey;
+        this.API_URL = API_URL;
+        this.getModels().then((models) => {
+            this.modelNames = models;
+            // Send models to webview if it's already initialized
+            if (this._view) {
+                this._view.webview.postMessage({
+                    command: 'updateModels',
+                    data: { models: this.modelNames }
+                });
+            }
+        });
     }
     resolveWebviewView(webviewView, context, _token) {
-        console.log('Resolving webview view');
+        // console.log('Resolving webview view');
         this._view = webviewView;
         this._isInitialized = true;
         webviewView.webview.options = {
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
         };
+        // Handle messages from the webview
+        webviewView.webview.onDidReceiveMessage(async (message) => {
+            switch (message.command) {
+                case 'getModels':
+                    webviewView.webview.postMessage({
+                        command: 'updateModels',
+                        data: { models: this.modelNames }
+                    });
+                    break;
+                case 'selectModel':
+                    await this.handleModelSelection(message.model);
+                    break;
+                case 'sendMessage':
+                    await this.handleUserMessage(message.text, message.model);
+                    break;
+            }
+        });
         this._updateWebview();
+    }
+    async handleModelSelection(model) {
+        this.selectedModel = model;
+        this._messages.push({
+            role: 'system',
+            content: `Model selected: ${model}`
+        });
+        this._postMessagesToWebview();
+    }
+    // Check if the API key exists, otherwise prompt the user
+    // private async initializeApiKey() {
+    //     if (!this._apiKey) {
+    //         this._apiKey = this.readApiKey();
+    //     }
+    //     if (!this._apiKey) {
+    //         // Prompt the user for the API key
+    //         this._apiKey = await vscode.window.showInputBox({
+    //             prompt: 'Enter your qBraid API Key:',
+    //             ignoreFocusOut: true,
+    //             password: true,
+    //         });
+    //         if (this._apiKey) {
+    //             this.saveApiKey(this._apiKey);
+    //             vscode.window.showInformationMessage('API Key saved successfully!');
+    //         } else {
+    //             vscode.window.showErrorMessage('API Key is required to use the chat feature.');
+    //         }
+    //     }
+    // }
+    // // Read the API key from ~/.qbraid/qbraidrc
+    // private readApiKey(): string | undefined {
+    //     if (fs.existsSync(CONFIG_FILE)) {
+    //         try {
+    //             const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+    //             const match = content.match(/^api-key\s*=\s*(.+)$/m);
+    //             return match ? match[1].trim() : undefined;
+    //         } catch (error) {
+    //             vscode.window.showErrorMessage('Error reading API key from qbraidrc.');
+    //         }
+    //     }
+    //     return undefined;
+    // }
+    // // Save the API key to ~/.qbraid/qbraidrc
+    // private saveApiKey(apiKey: string) {
+    //     try {
+    //         if (!fs.existsSync(CONFIG_DIR)) {
+    //             fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    //         }
+    //         const configContent = `[default]\nurl = ${API_URL}\napi-key = ${apiKey}\n`;
+    //         fs.writeFileSync(CONFIG_FILE, configContent, { encoding: 'utf8', mode: 0o600 });
+    //     } catch (error) {
+    //         vscode.window.showErrorMessage('Error saving API key.');
+    //     }
+    // }
+    async handleUserMessage(message, model) {
+        if (this.isProcessing) {
+            vscode.window.showInformationMessage('Please wait for the current message to be processed.');
+            return;
+        }
+        if (!this.selectedModel) {
+            vscode.window.showErrorMessage('Please select a model first.');
+            return;
+        }
+        if (!this._apiKey) {
+            vscode.window.showErrorMessage('API Key not set. Please provide the API Key to continue.');
+            return;
+        }
+        try {
+            this.isProcessing = true;
+            // Add user message
+            this._messages.push({
+                role: 'user',
+                content: message
+            });
+            this._postMessagesToWebview();
+            // Make API call
+            const stream = false;
+            const options = {
+                method: 'POST',
+                headers: { 'api-key': `${this._apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: message,
+                    model: model,
+                    stream: stream
+                })
+            };
+            // console.log("options: %o",options);
+            const response = await fetch(`${this.API_URL}/chat`, options);
+            const data = await response.json();
+            console.log(`response: ${JSON.stringify(response.statusText)} ${JSON.stringify(data)}`);
+            // Add assistant response
+            this._messages.push({
+                role: 'assistant',
+                content: data
+            });
+            this._postMessagesToWebview();
+        }
+        catch (error) {
+            console.error('Error in handleUserMessage:', error);
+            this._messages.push({
+                role: 'system',
+                content: 'Error: Failed to get response from AI model'
+            });
+            this._postMessagesToWebview();
+            vscode.window.showErrorMessage('Failed to send message. Please check your API key and network connection.');
+        }
+        finally {
+            this.isProcessing = false;
+        }
+    }
+    _postMessagesToWebview() {
+        if (this._view) {
+            this._view.webview.postMessage({ command: 'updateMessages', messages: this._messages });
+        }
     }
     _updateWebview() {
         if (this._view) {
-            this._view.webview.html = this._getHtmlForWebview();
+            this._view.webview.html = (0, webview_html_1.getWebviewContent)();
         }
     }
-    _getHtmlForWebview() {
-        const messages = this._messages.map(msg => `
-            <div class="${msg.role}-message">
-                <strong>${msg.role}:</strong> ${msg.content}
-            </div>
-        `).join('');
-        return `
-            <!DOCTYPE html>
-            <html>
-                <head>
-                    <style>
-                        body {
-                            padding: 10px;
-                        }
-                        .user-message {
-                            margin: 10px 0;
-                            padding: 10px;
-                            background-color: #e3f2fd;
-                            border-radius: 5px;
-                        }
-                        .assistant-message {
-                            margin: 10px 0;
-                            padding: 10px;
-                            background-color: #f5f5f5;
-                            border-radius: 5px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div id="chat-container">
-                        ${messages}
-                        ${this._messages.length === 0 ? '<p>No messages yet. Start chatting!</p>' : ''}
-                    </div>
-                </body>
-            </html>
-        `;
+    async getModels() {
+        const modelsAvailable = [];
+        try {
+            const options = { method: 'GET', headers: { 'api-key': `${this._apiKey}` } };
+            const response = await fetch(`${this.API_URL}/chat/models`, options);
+            const data = await response.json();
+            data.forEach((modelInfo) => {
+                modelsAvailable.push(modelInfo.model);
+            });
+        }
+        catch (error) {
+            console.error('Error getting models defaulting to gpt-4o-mini :', error);
+            modelsAvailable.push('gpt-4o-mini');
+            vscode.window.showErrorMessage('Failed to fetch available models. Using default model.');
+        }
+        return modelsAvailable;
     }
 }
 exports.ChatViewProvider = ChatViewProvider;
