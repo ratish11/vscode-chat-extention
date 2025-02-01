@@ -111,6 +111,36 @@ function getWebviewContent() {
                     clear: both;
                     display: table;
                 }
+                .message-content {
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                }
+
+                .copy-button {
+                    float: right;
+                    background: transparent;
+                    border: 1px solid #ffffff40;
+                    padding: 4px 8px;
+                    font-size: 12px;
+                    margin-left: 8px;
+                    opacity: 0.7;
+                }
+
+                .copy-button:hover {
+                    opacity: 1;
+                    background: #ffffff20;
+                }
+
+                pre {
+                    background: #00000020;
+                    padding: 10px;
+                    border-radius: 4px;
+                    overflow-x: auto;
+                }
+
+                code {
+                    font-family: 'Courier New', Courier, monospace;
+                }
             </style>
         </head>
         <body>
@@ -162,15 +192,40 @@ function getWebviewContent() {
                 }
 
                 function updateChatMessages(messages) {
-                    console.log('Processing messages in updateChatMessages:', messages); // Add this debug log
                     const chatContainer = document.getElementById('chat-container');
                     chatContainer.innerHTML = messages.map(msg => {
                         if (msg.role === 'system') {
                             return '<div class="message system-message">' + msg.content + '</div>';
                         }
-                        return '<div class="message ' + msg.role + '-message">' + msg.content + '</div>';
+                        
+                        const copyButton = msg.role === 'assistant' 
+                            ? '<button class="copy-button" onclick="copyMessage(this)">Copy</button>' 
+                            : '';
+                            
+                        return '<div class="message ' + msg.role + '-message">' +
+                            copyButton +
+                            '<div class="message-content">' + formatMessage(msg.content) + '</div>' +
+                            '</div>';
                     }).join('');
                     chatContainer.scrollTop = chatContainer.scrollHeight;
+                }
+
+                function formatMessage(content) {
+                    // Format code blocks
+                    return content.replace(/\`\`\`([\s\S]*?)\`\`\`/g, (match, code) => {
+                        return '<pre><code>' + code + '</code></pre>';
+                    });
+                }
+
+                function copyMessage(button) {
+                    const messageContent = button.nextElementSibling.textContent;
+                    navigator.clipboard.writeText(messageContent).then(() => {
+                        const originalText = button.textContent;
+                        button.textContent = 'Copied!';
+                        setTimeout(() => {
+                            button.textContent = originalText;
+                        }, 2000);
+                    });
                 }
 
                 // Handle model selection
