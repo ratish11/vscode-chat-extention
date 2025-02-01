@@ -14,6 +14,12 @@ interface ChatResponse {
     "content": string,
     "usage": any
 }
+
+interface ApiCategory {
+    category: 'quantum-devices' | 'quantum-jobs' | 'chat';
+    endpoint: string;
+    method: 'GET' | 'POST';
+}
 export class ChatViewProvider implements vscode.WebviewViewProvider {
     private  _view?: vscode.WebviewView;
     private _messages: ChatMessage[] = [];
@@ -87,55 +93,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
 
-    // Check if the API key exists, otherwise prompt the user
-    // private async initializeApiKey() {
-    //     if (!this._apiKey) {
-    //         this._apiKey = this.readApiKey();
-    //     }
+    public async determineMessageCategory(message: string): Promise<ApiCategory> {
+        // First ask the AI to categorize the message
+        const categoryPrompt = `Given the following user message, determine which API category it belongs to. The message should be categorized into one of these endpoints:
+        1. GET /quantum-devices - for questions about quantum devices, hardware, or machine specifications
+        2. GET /quantum-jobs - for questions about quantum job status, running jobs, or job history
+        3. POST /chat - for general questions, programming help, or quantum computing concepts
+    
+        User message: "${message}"
+        
+        Respond with just the endpoint that best matches the intent.`;
+    
+        try {
+            const options = {
+                method: 'POST',
+                headers: {'api-key': `${this._apiKey}`, 'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    prompt: categoryPrompt,
+                    model: this.selectedModel,
+                    stream: false
+                })
+            };
+            const response = await fetch(`${this.API_URL}/chat`, options);
+            const data = await response.json() as string;
+            console.log('Category determination response:', data);
+            
+            const responseText = typeof data === 'string' ? data : JSON.stringify(data);
 
-    //     if (!this._apiKey) {
-    //         // Prompt the user for the API key
-    //         this._apiKey = await vscode.window.showInputBox({
-    //             prompt: 'Enter your qBraid API Key:',
-    //             ignoreFocusOut: true,
-    //             password: true,
-    //         });
-
-    //         if (this._apiKey) {
-    //             this.saveApiKey(this._apiKey);
-    //             vscode.window.showInformationMessage('API Key saved successfully!');
-    //         } else {
-    //             vscode.window.showErrorMessage('API Key is required to use the chat feature.');
-    //         }
-    //     }
-    // }
-
-    // // Read the API key from ~/.qbraid/qbraidrc
-    // private readApiKey(): string | undefined {
-    //     if (fs.existsSync(CONFIG_FILE)) {
-    //         try {
-    //             const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-    //             const match = content.match(/^api-key\s*=\s*(.+)$/m);
-    //             return match ? match[1].trim() : undefined;
-    //         } catch (error) {
-    //             vscode.window.showErrorMessage('Error reading API key from qbraidrc.');
-    //         }
-    //     }
-    //     return undefined;
-    // }
-
-    // // Save the API key to ~/.qbraid/qbraidrc
-    // private saveApiKey(apiKey: string) {
-    //     try {
-    //         if (!fs.existsSync(CONFIG_DIR)) {
-    //             fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    //         }
-    //         const configContent = `[default]\nurl = ${API_URL}\napi-key = ${apiKey}\n`;
-    //         fs.writeFileSync(CONFIG_FILE, configContent, { encoding: 'utf8', mode: 0o600 });
-    //     } catch (error) {
-    //         vscode.window.showErrorMessage('Error saving API key.');
-    //     }
-    // }
+            // Parse the response to determine the category
+            if (responseText.toLowerCase().includes('quantum-devices')) {
+                return { category: 'quantum-devices', endpoint: '/quantum-devices', method: 'GET' };
+            } else if (responseText.toLowerCase().includes('quantum-jobs')) {
+                return { category: 'quantum-jobs', endpoint: '/quantum-jobs', method: 'GET' };
+            } else {
+                return { category: 'chat', endpoint: '/chat', method: 'POST' };
+            }
+        } catch (error) {
+            console.error('Error determining message category:', error);
+            return { category: 'chat', endpoint: '/chat', method: 'POST' }; // Default to chat if categorization fails
+        }
+    }
+    
     public async handleUserMessage(message: string, model: string) {
         if (this.isProcessing) {
             vscode.window.showInformationMessage('Please wait for the current message to be processed.');
@@ -152,42 +150,75 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        //TODO
-        //If this.modelSelected is not same is as the model passed in, load the chat history and send it to the LLM 
 
         try {
             this.isProcessing = true;
-
+            const category = await this.determineMessageCategory(message);
+            console.log('Determined category:', category);
             // Add user message
             this._messages.push({
                 role: 'user',
                 content: message
             });
             this._postMessagesToWebview();
-            console.log('Messages after user input:', this._messages);
-            // Make API call
-            const stream = false;
-            const options = {
-                method: 'POST',
-                headers: {'api-key': `${this._apiKey}`, 'Content-Type': 'application/json'},
-                body:  JSON.stringify({
-                    prompt: message,
-                    model: model,
-                    stream: stream
-                })
-            };
-            // console.log("options: %o",options);
-            const response = await fetch(`${this.API_URL}/chat`, options);
-            const data: ChatResponse = await response.json() as ChatResponse;
-            console.log(`response: ${JSON.stringify(response.statusText)} ${JSON.stringify(data)}`);
             
+            
+            // So far it is working, now I will add "Chain of Thoughts" feature to the model
+            // It should only consist of messages from the user, assistant.
 
-            // Add assistant response
-            this._messages.push({
-                role: 'assistant',
-                content: data.content
-            });
-            console.log('Messages after API response:', this._messages); // Debug log
+            // Handle the message based on the category
+            if (category.category === 'chat') {
+                // Existing chat logic
+                const previousMessages = this._messages
+                    .slice(0, -1)
+                    .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+                    .map(msg => `${msg.role}: ${msg.content}`)
+                    .join('\n');
+
+                const formattedPrompt = `Answer the following question: ${message}\n\n${
+                    previousMessages.length > 0 
+                        ? `Here is our history in this chat session:\n${previousMessages}`
+                        : ''
+                }`;
+
+                const options = {
+                    method: category.method,
+                    headers: {'api-key': `${this._apiKey}`, 'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        prompt: formattedPrompt,
+                        model: model,
+                        stream: false
+                    })
+                };
+                
+                const response = await fetch(`${this.API_URL}${category.endpoint}`, options);
+                
+                const data: ChatResponse = await response.json() as ChatResponse;
+                // console.log(`response: ${JSON.stringify(response.statusText)} ${JSON.stringify(data)} ${JSON.stringify(formattedPrompt)}`);
+                
+
+                // Add assistant response
+                this._messages.push({
+                    role: 'assistant',
+                    content: data.content
+                });
+            } else{
+                // Handle device or job queries
+                const options = {
+                    method: category.method,
+                    headers: {'api-key': `${this._apiKey}`},
+                };
+
+                const response = await fetch(`${this.API_URL}${category.endpoint}`, options);
+                const data = await response.json();
+
+                // Add formatted response to chat
+                this._messages.push({
+                    role: 'assistant',
+                    content: JSON.stringify(data, null, 2)
+                });
+            }
+            // console.log('Messages after API response:', this._messages); // Debug log
             this._postMessagesToWebview();
 
         } catch (error) {
@@ -406,3 +437,5 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 //         `;
 //     }
 }
+
+Level 1 basic are done, now lets do a little text cleaning and disply responses in a human readable manner and add a copy button to the response texts
