@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getWebviewContent } from './Webview';
+import { getWebviewContent } from './WebViewContent';
 // import * as fs from 'fs';
 // import * as path from 'path';
 // import * as os from 'os';
@@ -47,11 +47,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._view = webviewView;
     this._isInitialized = true;
 
-    webviewView.webview.options = {
+    this._view.webview.options = {
         enableScripts: true,
         localResourceRoots: [this._extensionUri]
     };
-
+    this._view.webview.html = getWebviewContent();
     // Handle messages from the webview
     webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.command) {
@@ -67,12 +67,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     break;
 
                 case 'sendMessage':
+                    console.log('Message from webview:', message.text);
                     await this.handleUserMessage(message.text, message.model);
                     break;
             }
         });
-
-        this._updateWebview();
+        if (this._messages.length > 0) {
+            this._postMessagesToWebview();
+        }
     }
 
     private async handleModelSelection(model: string) {
@@ -150,6 +152,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
         }
 
+        //TODO
+        //If this.modelSelected is not same is as the model passed in, load the chat history and send it to the LLM 
+
         try {
             this.isProcessing = true;
 
@@ -159,7 +164,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 content: message
             });
             this._postMessagesToWebview();
-
+            console.log('Messages after user input:', this._messages);
             // Make API call
             const stream = false;
             const options = {
@@ -182,6 +187,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 role: 'assistant',
                 content: data.content
             });
+            console.log('Messages after API response:', this._messages); // Debug log
             this._postMessagesToWebview();
 
         } catch (error) {
@@ -198,7 +204,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     private _postMessagesToWebview() {
         if (this._view) {
-            this._view.webview.postMessage({ command: 'updateMessages', messages: this._messages });
+            console.log('Updating webview with messages:', this._messages);
+            this._view.webview.postMessage({
+                command: 'updateMessages', 
+                data: { messages: this._messages }
+             });
+        } else {
+            console.error('Webview is not initialized.');
         }
     }
     

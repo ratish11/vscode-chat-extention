@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatViewProvider = void 0;
 const vscode = __importStar(require("vscode"));
-const webview_html_1 = require("./webview.html");
+const WebViewContent_1 = require("./WebViewContent");
 class ChatViewProvider {
     _extensionUri;
     _view;
@@ -65,10 +65,11 @@ class ChatViewProvider {
         // console.log('Resolving webview view');
         this._view = webviewView;
         this._isInitialized = true;
-        webviewView.webview.options = {
+        this._view.webview.options = {
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
         };
+        this._view.webview.html = (0, WebViewContent_1.getWebviewContent)();
         // Handle messages from the webview
         webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.command) {
@@ -82,11 +83,14 @@ class ChatViewProvider {
                     await this.handleModelSelection(message.model);
                     break;
                 case 'sendMessage':
+                    console.log('Message from webview:', message.text);
                     await this.handleUserMessage(message.text, message.model);
                     break;
             }
         });
-        this._updateWebview();
+        if (this._messages.length > 0) {
+            this._postMessagesToWebview();
+        }
     }
     async handleModelSelection(model) {
         this.selectedModel = model;
@@ -154,6 +158,8 @@ class ChatViewProvider {
             vscode.window.showErrorMessage('API Key not set. Please provide the API Key to continue.');
             return;
         }
+        //TODO
+        //If this.modelSelected is not same is as the model passed in, load the chat history and send it to the LLM 
         try {
             this.isProcessing = true;
             // Add user message
@@ -162,6 +168,7 @@ class ChatViewProvider {
                 content: message
             });
             this._postMessagesToWebview();
+            console.log('Messages after user input:', this._messages);
             // Make API call
             const stream = false;
             const options = {
@@ -180,8 +187,9 @@ class ChatViewProvider {
             // Add assistant response
             this._messages.push({
                 role: 'assistant',
-                content: data
+                content: data.content
             });
+            console.log('Messages after API response:', this._messages); // Debug log
             this._postMessagesToWebview();
         }
         catch (error) {
@@ -199,12 +207,19 @@ class ChatViewProvider {
     }
     _postMessagesToWebview() {
         if (this._view) {
-            this._view.webview.postMessage({ command: 'updateMessages', messages: this._messages });
+            console.log('Updating webview with messages:', this._messages);
+            this._view.webview.postMessage({
+                command: 'updateMessages',
+                data: { messages: this._messages }
+            });
+        }
+        else {
+            console.error('Webview is not initialized.');
         }
     }
     _updateWebview() {
         if (this._view) {
-            this._view.webview.html = (0, webview_html_1.getWebviewContent)();
+            this._view.webview.html = (0, WebViewContent_1.getWebviewContent)();
         }
     }
     async getModels() {
